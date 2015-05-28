@@ -1,178 +1,160 @@
 package com.tdoc.spooftdocserver;
 
-import android.app.Activity;
-import android.os.AsyncTask;
-import android.os.Looper;
-import android.preference.PreferenceManager;
-import android.support.v7.app.ActionBarActivity;
-import android.os.Bundle;
-import android.view.Menu;
-import android.view.MenuItem;
-import android.widget.TextView;
-
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.UnknownHostException;
 
+import android.app.Activity;
+import android.os.Bundle;
+import android.os.Handler;
+import android.util.Log;
+import android.widget.TextView;
 
-/**
- * The class extends the Thread class so we can receive and send messages at the same time
- */
-public class TCPServer extends Activity implements Runnable {
+public class TCPServer extends Activity {
+
+    private ServerSocket serverSocket;
+    Handler updateConversationHandler;
+    Thread serverThread = null;
+    private TextView tvMessagesReceived;
 
     public static final int SERVERPORT = 6667;
-    private boolean running = false;
-    private PrintWriter mOut;
-    private OnMessageReceived messageListener;
-    private TextView tvMessagesReceived;
-    private ServerSocket serverSocket;
-    private String clntMessage = "";
-
-    public TCPServer(){}
-
-    /**
-     * Constructor of the class
-     * @param messageListener listens for the messages
-     */
-    public TCPServer(OnMessageReceived messageListener) {
-        Looper.prepare();
-        this.messageListener = messageListener;
-    }
 
     @Override
-    public void onCreate(Bundle savedInstanceState){
+    public void onCreate(Bundle savedInstanceState) {
+
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_tcpserver);
-
         tvMessagesReceived = (TextView) findViewById(R.id.tvMessagesReceived);
 
+        updateConversationHandler = new Handler();
+
+        this.serverThread = new Thread(new ServerThread());
+        this.serverThread.start();
+
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
         try {
-            //creates the object OnMessageReceived asked by the TCPServer constructor
-            new AsyncTask() {
-                @Override
-                protected Object doInBackground(Object... arg0) {
-                    try {
-                        TCPServer server = new TCPServer(new TCPServer.OnMessageReceived() {
-
-                            @Override
-                            //this method declared in the interface from TCPServer class is implemented here
-                            //this method is actually a callback method, because it will run every time when it will be called from
-                            //TCPServer class (at while)
-                            public void messageReceived(String message) {
-                                clntMessage = message;
-                                sendMessage("TDOC got: " + message);
-                                if (message.equals("Item number 1")) {
-                                    sendMessage("This would be the first item.");
-                                } else if (message.equals("Item number 2")) {
-                                    sendMessage("This would be the second item.");
-                                } else if (message.equals("Item number 3")) {
-                                    sendMessage("This would be the third item.");
-                                } else if (message.equals("Getinge!")) {
-                                    sendMessage("This is the company!");
-                                } else {
-                                    sendMessage("We'll pretend we don't know what this is.");
-                                }
-                            }
-                        });
-                        server.run();
-                        return clntMessage;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return e;
-                    }
-                }
-
-                @Override
-                protected void onPostExecute(Object message) {
-                    tvMessagesReceived.append("\n " + message);
-                }
-            }.execute();
-        } catch (Exception e){
+            serverSocket.close();
+        } catch (IOException e) {
             e.printStackTrace();
-            tvMessagesReceived.setText("Der skete en fejl:\n" + e);
         }
     }
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        stopServer();
+    class ServerThread implements Runnable {
 
-    }
+        public void run() {
+            Socket socket;
+            System.out.println("Serverthread");
+            try {
+                serverSocket = new ServerSocket(SERVERPORT);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            //while (!Thread.currentThread().isInterrupted()) {
+            try {
+                Log.d("DeviceIP", InetAddress.getLocalHost().getHostAddress());
+            }catch (UnknownHostException e){
+                e.printStackTrace();
+            }
+                try {
+
+                    socket = serverSocket.accept();
+                    System.out.println("Socketaccept");
+                    CommunicationThread commThread = new CommunicationThread(socket);
+                    new Thread(commThread).start();
 
 
-    /**
-     * Method to send the messages from server to client
-     * @param message the message sent by the server
-     */
-    public void sendMessage(String message){
-        if (mOut != null && !mOut.checkError()) {
-            mOut.println(message);
-            mOut.flush();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            //}
         }
     }
-    public void stopServer(){
-        running = false;
-    }
 
-    @Override
-    public void run() {
+    class CommunicationThread implements Runnable {
 
-        running = true;
+        private Socket clientSocket;
 
-        try {
-            System.out.println("S: Connecting...");
+        private BufferedReader input;
 
-            //create a server socket. A server socket waits for requests to come in over the network.
-            serverSocket = new ServerSocket(SERVERPORT);
+        public CommunicationThread(Socket clientSocket) {
 
-            //create client socket... the method accept() listens for a connection to be made to this socket and accepts it.
-            Socket client = serverSocket.accept();
-            System.out.println("S: Receiving...");
-            System.out.println(client.getInetAddress().getHostAddress());
+            this.clientSocket = clientSocket;
 
             try {
 
-                //sends the message to the client
-                mOut = new PrintWriter(new BufferedWriter(new OutputStreamWriter(client.getOutputStream())), true);
+                this.input = new BufferedReader(new InputStreamReader(this.clientSocket.getInputStream()));
 
-                //read the message received from client
-                BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
-
-                //in this while we wait to receive messages from client (it's an infinite loop)
-                //this while it's like a listener for messages
-                while (running) {
-                    String message = in.readLine();
-
-                    if (message != null && messageListener != null) {
-                        //call the method messageReceived from ServerBoard class
-                        messageListener.messageReceived(message);
-                    }
-                }
-
-            } catch (Exception e) {
-                System.out.println("S: Error");
+            } catch (IOException e) {
                 e.printStackTrace();
-            } finally {
-                client.close();
-                System.out.println("S: Done.");
             }
+        }
 
-        } catch (Exception e) {
-            System.out.println("S: Error");
-            e.printStackTrace();
+        public void run() {
+
+
+            while (!Thread.currentThread().isInterrupted()) {
+
+                try {
+
+                    String read = input.readLine();
+                    String answer;
+                    updateConversationHandler.post(new updateUIThread(read));
+                    try {
+                        PrintWriter out = new PrintWriter(new BufferedWriter(
+                                new OutputStreamWriter(clientSocket.getOutputStream())),
+                                true);
+                        if (read.equals("Item number 1")) {
+                            answer = "This would be the first item.";
+                        } else if (read.equals("Item number 2")) {
+                            answer = "This would be the second item.";
+                        } else if (read.equals("Item number 3")) {
+                            answer = "This would be the third item.";
+                        } else if (read.equals("Getinge!")) {
+                            answer = "This is the company!";
+                        } else {
+                            answer = "We'll pretend we don't know what this is.";
+                        }
+                        out.println(answer);
+                    } catch (UnknownHostException e) {
+                        e.printStackTrace();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
         }
 
     }
 
-    //Declare the interface. The method messageReceived(String message) will must be implemented in the ServerBoard
-    //class at on startServer button click
-    public interface OnMessageReceived {
-        void messageReceived(String message);
+    class updateUIThread implements Runnable {
+        private String msg;
+
+        public updateUIThread(String str) {
+            this.msg = str;
+        }
+
+        @Override
+        public void run() {
+            tvMessagesReceived.setText(tvMessagesReceived.getText().toString() + "Client Says: "+ msg + "\n");
+        }
+
     }
 
 }
+
